@@ -2,7 +2,10 @@ package com.gallet;
 
 import android.content.Intent;
 import android.net.Uri;
+import android.os.AsyncTask;
+import android.os.Handler;
 import android.os.StrictMode;
+import android.renderscript.ScriptGroup;
 import android.support.v7.app.AppCompatActivity;
 import android.os.Bundle;
 import android.view.KeyEvent;
@@ -16,27 +19,22 @@ import android.widget.Toast;
 import org.apache.commons.net.telnet.TelnetClient;
 import org.apache.commons.net.telnet.TelnetNotificationHandler;
 
+import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.io.OutputStreamWriter;
+import java.io.Writer;
 import java.util.Arrays;
 
-public class MainActivity extends AppCompatActivity implements TelnetNotificationHandler, Runnable {
-
-    public static final int STATE_IDLE = -1;
-    public static final int STATE_CONNECT = 1;
-    public static final int STATE_READ = 2;
-    public static final int STATE_DISCONNECT = 3;
-    public static final int STATE_WRITE = 4;
-    public static final int STATE_CONNECT_AND_READ = 5;
-
-
-    int state = STATE_IDLE;
+public class MainActivity extends AppCompatActivity implements TelnetNotificationHandler{
 
     TelnetClient tc = new TelnetClient();
     boolean connected = false;
 
-    String ip = "freechess.org";
+    //String ip = "freechess.org";
+    String ip = "167.114.65.195";
     int port = 5000;
 
     //String ip = "towel.blinkenlights.nl";
@@ -48,21 +46,18 @@ public class MainActivity extends AppCompatActivity implements TelnetNotificatio
     TextView areaText;
     EditText edit;
 
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
-
         if (android.os.Build.VERSION.SDK_INT > 9) {
             StrictMode.ThreadPolicy policy = new StrictMode.ThreadPolicy.Builder().permitAll().build();
             StrictMode.setThreadPolicy(policy);
         }
-
         areaText = findViewById(R.id.areaText);
         edit = findViewById(R.id.write_data);
-
-        showHelp();
-
+        showTop();
         findViewById(R.id.button1).setOnClickListener( new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -70,24 +65,90 @@ public class MainActivity extends AppCompatActivity implements TelnetNotificatio
                 sendCommand();
             }
         });
-
         findViewById(R.id.buttonConnect).setOnClickListener( new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                connect();
+               connect();
             }
         });
-
     }
 
 
-    void sendCommand(){
-        cmd = ((EditText)findViewById(R.id.write_data)).getText().toString();
-        ((EditText)findViewById(R.id.write_data)).setText("");
 
+
+
+
+
+
+    private class TelnetRead extends AsyncTask<String, String, String> {
+        @Override
+        protected String doInBackground(String... params) {
+            try {
+                InputStream in = tc.getInputStream();
+                BufferedReader r = new BufferedReader(new InputStreamReader(in));
+                String aad = r.readLine();
+                while (true) {
+                    publishProgress(aad);
+                    aad = r.readLine();
+                }
+            }
+            catch (Exception e) {
+                e.printStackTrace();
+                return e.toString();
+            }
+        }
+        @Override
+        protected void onPostExecute(String result) {
+            /*try {
+                areaText.append(result);
+                Thread.sleep(10);
+            } catch (InterruptedException e) {
+                Thread.interrupted();
+            }*/
+            Toast.makeText(MainActivity.this, result.toString(), Toast.LENGTH_SHORT).show();
+        }
+        @Override
+        protected void onPreExecute() {
+        }
+        //@Override
+        protected void onProgressUpdate(String... result) {
+            areaText.append(result[0]);
+        }
+    }
+
+
+    void connect(){
+        tc.registerNotifHandler(this);
+        try {
+            tc.connect(ip, port);
+            connected = true;
+            TelnetRead telnetRead = new TelnetRead();
+            telnetRead.execute();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    void sendCommand(){
         cmd = cmd.trim();
         if(connected){
-            write();
+            try {
+                //OutputStream os = tc.getOutputStream();
+                //os.write((edit.getText().toString() + '\r').getBytes());
+                //edit.setText("");
+                //os.flush();
+
+                // Adjust the encoding to whatever you want, but you need to decide...
+                Writer writer = new OutputStreamWriter(tc.getOutputStream(), "UTF-8");
+                writer.write(edit.getText().toString() + '\r');
+                writer.flush();
+
+
+                TelnetRead telnetRead = new TelnetRead();
+                telnetRead.execute();
+            } catch (Exception ex) {
+                ex.printStackTrace();
+            }
             return;
         } else if( !connected){
             connect();
@@ -95,81 +156,20 @@ public class MainActivity extends AppCompatActivity implements TelnetNotificatio
         }
     }
 
-    void showHelp(){
+    void showTop(){
         areaText.append("\n\t------ Telnet ------\n");
         areaText.append("\n");
     }
 
     @Override
     public void receivedNegotiation(int negotiation_code, int option_code) {
+        System.out.println("negotiation_code: " + negotiation_code + " option_code: " + option_code);
         areaText.append("negotiation_code: " + negotiation_code + " option_code: " + option_code);
     }
 
-    @Override
-    public void run() {
-        System.out.println("ESTE ES EL PUTO ESTADO"+state);
-        switch (state){
-            case STATE_CONNECT:
-                connect();
-                break;
-            case STATE_READ:
-                read();
-                break;
-            case STATE_DISCONNECT:
-                disconnect();
-                break;
-            case STATE_WRITE:
-                write();
-                break;
-            case STATE_CONNECT_AND_READ:
-                connect();
-                read();
-                break;
-        }
-    }
 
-    void connect(){
-        tc.registerNotifHandler(this);
-        try {
-            tc.connect(ip, port);
-            connected = true;
-            // I read when connect coz else it never fires
-            read();
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-    }
 
-    void read(){
-        InputStream instr = tc.getInputStream();
-        try
-        {
-            byte[] buff = new byte[1024];
-            int ret_read;
-            while (connected && (ret_read = instr.read(buff)) != -1){
-                sBuf = new StringBuffer();
-                sBuf.append(new String(buff,0,ret_read));
-                System.out.println("out" +sBuf.toString());
-                runOnUiThread(() -> {
-                    areaText.append(sBuf.toString());
-                });
-            }
-        }
-        catch (IOException e)
-        {
-            e.printStackTrace();
-        }
-    }
 
-    void write() {
-        OutputStream os = tc.getOutputStream();
-        try {
-            os.write((edit.getText().toString() + '\r').getBytes());
-            os.flush();
-        } catch (Exception ex) {
-            ex.printStackTrace();
-        }
-    }
 
     void disconnect(){
         connected = false;
